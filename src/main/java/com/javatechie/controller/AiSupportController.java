@@ -13,11 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/ai-support")
 public class AiSupportController {
 
-    private JavaTechieAIAgent agent;
+    private final JavaTechieAIAgent agent;
 
-    private OrderSupportAIAgent orderSupportAIAgent;
+    private final OrderSupportAIAgent orderSupportAIAgent;
 
-    //private WorkflowSupportAgent workflowSupportAgent;
+    private final WorkflowSupportAgent workflowSupportAgent;
 
     private final SupervisorAgent supervisorAgent;
 
@@ -25,11 +25,11 @@ public class AiSupportController {
     public AiSupportController(
             JavaTechieAIAgent agent,
             OrderSupportAIAgent orderSupportAIAgent,
-           // WorkflowSupportAgent workflowSupportAgent,
+            WorkflowSupportAgent workflowSupportAgent,
             SupervisorAgent supervisorAgent) {
         this.agent = agent;
         this.orderSupportAIAgent = orderSupportAIAgent;
-        //this.workflowSupportAgent = workflowSupportAgent;
+        this.workflowSupportAgent = workflowSupportAgent;
         this.supervisorAgent = supervisorAgent;
     }
 
@@ -48,8 +48,7 @@ public class AiSupportController {
     @GetMapping("/workflow")
     public String workflowSupport(
             @RequestParam String request) {
-        //return workflowSupportAgent.handle(request);
-        return "Workflow support not implemented.";
+        return workflowSupportAgent.handle(request);
     }
 
     @GetMapping("/supervisor")
