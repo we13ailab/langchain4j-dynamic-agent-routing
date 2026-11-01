@@ -1,0 +1,906 @@
+{
+  "info": {
+    "_postman_id": "c5d6e7f8-a9b0-4321-8def-a45678901234",
+    "name": "Dynamic Agent Routing API",
+    "description": "Test collection for the langchain4j-dynamic-agent-routing Spring Boot app.\n\n**Endpoints**\n- `GET /api/ai-support` — General AI chat (JavaTechieAIAgent, no tools)\n- `GET /api/ai-support/order` — Order support AI (OrderSupportAIAgent, with tools: getOrderStatus, cancelOrder)\n- `GET /api/ai-support/workflow` — Static multi-agent workflow (WorkflowSupportAgent: OrderAgent -> ShippingAgent -> RefundAgent -> ResponseAgent, with tools: getOrderStatus, trackShipment, checkRefundEligibility)\n- `GET /api/ai-support/supervisor` — Dynamic agent routing (SupervisorAgent: an LLM supervisor decides at runtime which sub-agents to invoke)\n\n**Setup**\n1. Start the app (runs on the Spring Boot default port 8080).\n2. Update the `baseUrl` / `orderId*` collection variables (Collection → Variables) with your values.\n3. Watch the app console for `TOOL CALLED -> ...` and `=== AGENT START/END ===` logs to confirm tool and agent invocation.\n\n**Static vs dynamic**: the `/workflow` endpoint always runs every agent in a fixed sequence; the `/supervisor` endpoint picks only the agents the request actually needs (e.g. a shipping-only question skips RefundAgent).\n\n**Error scenarios note**: tool errors (order not found / cancel shipped / missing refund policy / missing shipment tracking) may return either `200` (LLM handles the tool error gracefully) or `500` (exception propagates) depending on the langchain4j version — the tests accept both.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "orderId1",
+      "value": "ORD-1001",
+      "description": "A SHIPPED order with tracking data (refund not eligible)"
+    },
+    {
+      "key": "orderId2",
+      "value": "ORD-1002",
+      "description": "A Processing order (cancellable; no tracking data yet)"
+    },
+    {
+      "key": "orderId3",
+      "value": "ORD-1003",
+      "description": "A SHIPPED order (cancel should fail; has tracking data)"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. General AI Chat",
+      "description": "Requests against `GET /api/ai-support` — the JavaTechieAIAgent (no tools attached).",
+      "item": [
+        {
+          "name": "1.1 Simple greeting",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support?message=Hello, who are you?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "Hello, who are you?"
+                }
+              ]
+            },
+            "description": "Basic sanity check — the agent should introduce itself (see its @SystemMessage identity prompt). No tools involved."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 General knowledge question",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support?message=What is LangChain4j?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "What is LangChain4j?"
+                }
+              ]
+            },
+            "description": "General knowledge question — verifies the plain chat model responds."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Coding help",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support?message=Give me a one-line summary of Spring Boot",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "Give me a one-line summary of Spring Boot"
+                }
+              ]
+            },
+            "description": "Another general chat sample — useful for comparing latency across prompts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Order Support AI (tools)",
+      "description": "Requests against `GET /api/ai-support/order` — the OrderSupportAIAgent single-agent service with access to order tools (getOrderStatus, cancelOrder).",
+      "item": [
+        {
+          "name": "2.1 Ask for order status (tool: getOrderStatus)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order?message=What is the status of my order {{orderId1}}?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "What is the status of my order {{orderId1}}?"
+                }
+              ]
+            },
+            "description": "The agent should invoke the getOrderStatus tool and answer with real data from the orders table — not invented data."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Ask for delivery details (tool: getOrderStatus)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order?message=When will order {{orderId1}} be delivered and where is it right now?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "When will order {{orderId1}} be delivered and where is it right now?"
+                }
+              ]
+            },
+            "description": "Another getOrderStatus scenario phrased differently — checks tool selection on differently worded prompts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 Cancel an order (tool: cancelOrder)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order?message=Please cancel my order {{orderId2}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "Please cancel my order {{orderId2}}"
+                }
+              ]
+            },
+            "description": "orderId2 is in Processing state, so cancellation should succeed. NOTE: this mutates the database — re-run seed reset (docker compose down --volumes) or change status back if you need to repeat it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.4 Cancel a SHIPPED order (expect rejection)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order?message=I want to cancel order {{orderId3}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "I want to cancel order {{orderId3}}"
+                }
+              ]
+            },
+            "description": "orderId3 is Shipped — the cancelOrder tool throws OrderCannotBeCancelledException. Expect a curated refusal (200) or a propagated error (500)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 or 500 (tool error handled or propagated)\", function () {",
+                  "    pm.expect([200, 500]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.5 Order not found (expect error)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order?message=What is the status of order ORD-9999?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "What is the status of order ORD-9999?"
+                }
+              ]
+            },
+            "description": "Unknown order id — the getOrderStatus tool throws OrderNotFoundException. Expect the LLM to relay the curated 'double-check your order number' message (200) or a propagated error (500)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 or 500 (tool error handled or propagated)\", function () {",
+                  "    pm.expect([200, 500]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.6 Non-order question (tools should NOT be invoked)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order?message=What is your return policy?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": "What is your return policy?"
+                }
+              ]
+            },
+            "description": "A question that does not need a tool — verifies the agent does not call order tools unnecessarily (check the app console: no TOOL CALLED line for this request)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Static Multi-Agent Workflow",
+      "description": "Requests against `GET /api/ai-support/workflow` — WorkflowSupportAgent, a fixed sequence OrderAgent -> ShippingAgent -> RefundAgent -> ResponseAgent. Every request runs all four agents; watch the console for === AGENT START/END === and TOOL CALLED -> lines.",
+      "item": [
+        {
+          "name": "3.1 Refund request (full fixed pipeline)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/workflow?request=Can I get a refund for my order {{orderId1}}?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "workflow"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "Can I get a refund for my order {{orderId1}}?"
+                }
+              ]
+            },
+            "description": "Runs the whole pipeline: order details -> shipping details -> refund decision -> final response. The answer should combine the real order record and the refund policy row."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 Shipping question through the workflow",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/workflow?request=Where is my order {{orderId3}} and what is the tracking number?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "workflow"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "Where is my order {{orderId3}} and what is the tracking number?"
+                }
+              ]
+            },
+            "description": "Even though the user only asked about shipping, the fixed pipeline also runs the refund agent. The final answer must include the tracking number (TRK-DL-550102) and must NOT mention refunds unless asked."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});",
+                  "pm.test(\"Answer includes the tracking number\", function () {",
+                  "    pm.expect(pm.response.text()).to.include(\"TRK-DL-550102\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 Compound request: shipping + refund",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/workflow?request=What is the delivery status of order {{orderId1}} and can it still be refunded?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "workflow"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "What is the delivery status of order {{orderId1}} and can it still be refunded?"
+                }
+              ]
+            },
+            "description": "A compound question — the fixed pipeline is ideal here because both shipping and refund information are needed in one answer."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.4 Refund request for an unknown order (expect graceful handling)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/workflow?request=Please refund my order ORD-9999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "workflow"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "Please refund my order ORD-9999"
+                }
+              ]
+            },
+            "description": "Unknown order id — OrderAgent's getOrderStatus tool throws OrderNotFoundException. Expect a curated 'double-check the order number' answer (200) or a propagated error (500)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 or 500 (tool error handled or propagated)\", function () {",
+                  "    pm.expect([200, 500]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Supervisor Dynamic Routing",
+      "description": "Requests against `GET /api/ai-support/supervisor` — SupervisorAgent. An LLM supervisor reads the request and the @Agent descriptions, then decides which sub-agents to invoke. Contrast with folder 3: single-topic questions here should skip irrelevant agents.",
+      "item": [
+        {
+          "name": "4.1 Order status question (route: OrderAgent)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=What is the status of my order {{orderId1}}?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "What is the status of my order {{orderId1}}?"
+                }
+              ]
+            },
+            "description": "A pure order-status question — the supervisor should invoke OrderAgent (plus ResponseAgent for the final answer) and skip RefundAgent and ShippingAgent. Check the console agent logs to confirm."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 Shipping-only question (route: ShippingAgent)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=What is the tracking number and current location of my shipment for order {{orderId3}}?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "What is the tracking number and current location of my shipment for order {{orderId3}}?"
+                }
+              ]
+            },
+            "description": "A shipping-only question — the supervisor should NOT need RefundAgent here. Compare with 3.2, where the fixed workflow always runs every agent. The answer should include tracking number TRK-DL-550102."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});",
+                  "pm.test(\"Answer includes the tracking number\", function () {",
+                  "    pm.expect(pm.response.text()).to.include(\"TRK-DL-550102\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 Refund-only question (route: OrderAgent + RefundAgent)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=Am I eligible for a refund on order {{orderId1}}?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "Am I eligible for a refund on order {{orderId1}}?"
+                }
+              ]
+            },
+            "description": "A refund-only question — the supervisor should invoke OrderAgent and RefundAgent and skip ShippingAgent."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.4 Compound request (route: multiple agents)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=Where is my order ORD-1004, what is the tracking number, and can I still get a refund?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "Where is my order ORD-1004, what is the tracking number, and can I still get a refund?"
+                }
+              ]
+            },
+            "description": "A compound question needing order, shipping and refund information — the supervisor should chain multiple agents (like the fixed workflow, but chosen dynamically)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.5 Refund with no policy (expect curated error)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=Can I get a refund for my order ORD-1006?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "Can I get a refund for my order ORD-1006?"
+                }
+              ]
+            },
+            "description": "ORD-1006 is Packed and deliberately has no refund_policy row — the checkRefundEligibility tool throws RefundPolicyNotFoundException. Expect the curated 'needs manual review' message (200) or a propagated error (500)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 or 500 (tool error handled or propagated)\", function () {",
+                  "    pm.expect([200, 500]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.6 Tracking for an unshipped order (expect curated error)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=What is the tracking number for my order {{orderId2}}?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "What is the tracking number for my order {{orderId2}}?"
+                }
+              ]
+            },
+            "description": "orderId2 is still Processing and deliberately has no shipment_tracking row — the trackShipment tool throws ShipmentTrackingNotFoundException. Expect the curated 'may not have shipped yet' message (200) or a propagated error (500)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 or 500 (tool error handled or propagated)\", function () {",
+                  "    pm.expect([200, 500]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.7 Non-order question (no tools)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor?request=What is your return policy?",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"],
+              "query": [
+                {
+                  "key": "request",
+                  "value": "What is your return policy?"
+                }
+              ]
+            },
+            "description": "A general question — the supervisor should answer directly (or via the response agent) without invoking any tool-backed agent. Check the console: no TOOL CALLED line for this request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Edge Cases",
+      "description": "Negative HTTP-level tests: missing or empty required query parameters should produce 400 Bad Request.",
+      "item": [
+        {
+          "name": "5.1 Missing 'message' on /api/ai-support (expect 400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support"]
+            },
+            "description": "The 'message' parameter is required — Spring returns 400 when it is missing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.2 Missing 'message' on /api/ai-support/order (expect 400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/order",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "order"]
+            },
+            "description": "The 'message' parameter is required — Spring returns 400 when it is missing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.3 Missing 'request' on /api/ai-support/workflow (expect 400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/workflow",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "workflow"]
+            },
+            "description": "The 'request' parameter is required — Spring returns 400 when it is missing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.4 Missing 'request' on /api/ai-support/supervisor (expect 400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support/supervisor",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support", "supervisor"]
+            },
+            "description": "The 'request' parameter is required — Spring returns 400 when it is missing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.5 Empty message value (expect 200 with a clarification)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ai-support?message=",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ai-support"],
+              "query": [
+                {
+                  "key": "message",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "An empty message is still a valid string — the agent should reply asking what the user needs rather than failing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response body is not empty\", function () {",
+                  "    pm.expect(pm.response.text().trim()).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

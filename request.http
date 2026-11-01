@@ -1,0 +1,150 @@
+### ============================================================
+### langchain4j-dynamic-agent-routing — API Test Requests
+###
+### Works with:
+###   - IntelliJ IDEA / WebStorm HTTP Client
+###   - VS Code "REST Client" extension
+###
+### App base URL: http://localhost:8080
+### (Spring Boot default port — no server.port override
+### in src/main/resources/application.yaml)
+###
+### Seed data is loaded automatically from data.sql at startup,
+### so ORD-1001 ... ORD-1006 exist out of the box.
+### ============================================================
+
+@baseUrl = http://localhost:8080
+@endpoint = {{baseUrl}}/api/ai-support
+@orderEndpoint = {{baseUrl}}/api/ai-support/order
+@workflowEndpoint = {{baseUrl}}/api/ai-support/workflow
+@supervisorEndpoint = {{baseUrl}}/api/ai-support/supervisor
+
+### ============================================================
+### 1. General AI Chat  (JavaTechieAIAgent — no tools attached)
+### ============================================================
+
+### 1.1 Simple greeting
+GET {{endpoint}}?message=Hello, who are you?
+
+### 1.2 General knowledge question
+GET {{endpoint}}?message=What is LangChain4j?
+
+### 1.3 Coding help
+GET {{endpoint}}?message=Give me a one-line summary of Spring Boot
+
+### ============================================================
+### 2. Order Support AI  (OrderSupportAIAgent — with tools:
+###    getOrderStatus, cancelOrder)
+### ============================================================
+
+### 2.1 Ask for order status (triggers getOrderStatus tool)
+GET {{orderEndpoint}}?message=What is the status of my order ORD-1001?
+
+### 2.2 Ask for delivery details (triggers getOrderStatus tool)
+GET {{orderEndpoint}}?message=When will order ORD-1001 be delivered and where is it right now?
+
+### 2.3 Cancel an order (triggers cancelOrder tool)
+GET {{orderEndpoint}}?message=Please cancel my order ORD-1002
+
+### 2.4 Cancel a SHIPPED order (expect error: cannot cancel shipped order)
+GET {{orderEndpoint}}?message=I want to cancel order ORD-1003
+
+### 2.5 Order not found (expect error: Order not found)
+GET {{orderEndpoint}}?message=What is the status of order ORD-9999?
+
+### 2.6 Non-order question (tools should NOT be invoked)
+GET {{orderEndpoint}}?message=What is your return policy?
+
+### ============================================================
+### 3. Static Multi-Agent Workflow  (WorkflowSupportAgent — fixed
+###    sequence: OrderAgent -> ShippingAgent -> RefundAgent ->
+###    ResponseAgent, with tools getOrderStatus, trackShipment
+###    and checkRefundEligibility)
+###
+### Watch the app console for "=== AGENT START ===" /
+### "TOOL CALLED -> ..." / "=== AGENT END ===" log lines.
+### ============================================================
+
+### 3.1 Refund request (runs the full fixed pipeline)
+GET {{workflowEndpoint}}?request=Can I get a refund for my order ORD-1001?
+
+### 3.2 Shipping question through the workflow (includes tracking number)
+GET {{workflowEndpoint}}?request=Where is my order ORD-1003 and what is the tracking number?
+
+### 3.3 Compound request: shipping + refund in one question
+GET {{workflowEndpoint}}?request=What is the delivery status of order ORD-1001 and can it still be refunded?
+
+### 3.4 Refund request for an unknown order (expect graceful handling)
+GET {{workflowEndpoint}}?request=Please refund my order ORD-9999
+
+### ============================================================
+### 4. Supervisor Dynamic Routing  (SupervisorAgent — an LLM
+###    decides at runtime which sub-agents to invoke based on
+###    the request and the @Agent descriptions)
+###
+### Contrast with section 3: a shipping-only question here
+### should NOT invoke RefundAgent, while the fixed workflow
+### always runs every agent.
+### ============================================================
+
+### 4.1 Order-status question (supervisor should route to OrderAgent,
+###     and usually ResponseAgent for the final answer)
+GET {{supervisorEndpoint}}?request=What is the status of my order ORD-1001?
+
+### 4.2 Shipping-only question (supervisor should pick ShippingAgent —
+###     no refund agent needed; compare with 3.2)
+GET {{supervisorEndpoint}}?request=What is the tracking number and current location of my shipment for order ORD-1003?
+
+### 4.3 Refund-only question (supervisor should pick OrderAgent +
+###     RefundAgent, skipping ShippingAgent)
+GET {{supervisorEndpoint}}?request=Am I eligible for a refund on order ORD-1001?
+
+### 4.4 Compound request (supervisor must combine several agents)
+GET {{supervisorEndpoint}}?request=Where is my order ORD-1004, what is the tracking number, and can I still get a refund?
+
+### 4.5 Refund on an order with no refund policy (ORD-1006 is Packed —
+###     expect curated RefundPolicyNotFoundException message)
+GET {{supervisorEndpoint}}?request=Can I get a refund for my order ORD-1006?
+
+### 4.6 Tracking for an order that has not shipped (ORD-1002 is
+###     Processing — expect curated ShipmentTrackingNotFoundException message)
+GET {{supervisorEndpoint}}?request=What is the tracking number for my order ORD-1002?
+
+### 4.7 Non-order question (supervisor should answer directly / route
+###     to the response agent only — no tools invoked)
+GET {{supervisorEndpoint}}?request=What is your return policy?
+
+### ============================================================
+### 5. Negative / Edge Cases
+### ============================================================
+
+### 5.1 Missing required 'message' param (expect 400 Bad Request)
+GET {{endpoint}}
+
+### 5.2 Missing required 'message' param on order endpoint (expect 400)
+GET {{orderEndpoint}}
+
+### 5.3 Missing required 'request' param on workflow endpoint (expect 400)
+GET {{workflowEndpoint}}
+
+### 5.4 Missing required 'request' param on supervisor endpoint (expect 400)
+GET {{supervisorEndpoint}}
+
+### 5.5 Empty message value
+GET {{endpoint}}?message=
+
+### ============================================================
+### 6. Handy cURL equivalents (copy/paste into a terminal)
+### ============================================================
+
+# General chat:
+# curl "http://localhost:8080/api/ai-support?message=Hello"
+#
+# Order status:
+# curl "http://localhost:8080/api/ai-support/order?message=What%20is%20the%20status%20of%20my%20order%20ORD-1001%3F"
+#
+# Static multi-agent workflow:
+# curl "http://localhost:8080/api/ai-support/workflow?request=Can%20I%20get%20a%20refund%20for%20my%20order%20ORD-1001%3F"
+#
+# Supervisor dynamic routing:
+# curl "http://localhost:8080/api/ai-support/supervisor?request=What%20is%20the%20tracking%20number%20for%20my%20order%20ORD-1003%3F"
